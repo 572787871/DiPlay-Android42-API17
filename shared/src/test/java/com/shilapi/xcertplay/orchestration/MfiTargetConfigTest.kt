@@ -51,18 +51,44 @@ class MfiTargetConfigTest {
         }
     }
 
+    @Test
+    fun wiredTransportIgnoresIncompleteManualHotspotSettings() {
+        val config = config(
+            mfiTarget = MfiTarget.LOCAL,
+            transport = CarPlayTransport.WIRED,
+            wirelessHotspotMode = WirelessHotspotMode.MANUAL,
+        )
+
+        assertEquals(CarPlayTransport.WIRED, config.transport)
+    }
+
+    @Test
+    fun wirelessManualHotspotStillRequiresSsid() {
+        assertThrows(IllegalArgumentException::class.java) {
+            config(
+                mfiTarget = MfiTarget.LOCAL,
+                transport = CarPlayTransport.WIRELESS,
+                wirelessHotspotMode = WirelessHotspotMode.MANUAL,
+            )
+        }
+    }
+
     private fun config(
         mfiTarget: MfiTarget,
         ch341Devices: List<UsbDeviceId> = emptyList(),
         linuxI2cPath: String? = null,
         remoteMfiServer: String? = null,
         remoteMfiToken: String? = null,
+        transport: CarPlayTransport = CarPlayTransport.WIRED,
+        wirelessHotspotMode: WirelessHotspotMode = WirelessHotspotMode.WIFI_P2P,
     ): CarPlayRuntimeConfig = CarPlayRuntimeConfig(
         mfiTarget = mfiTarget,
         ch341Devices = ch341Devices,
         linuxI2cPath = linuxI2cPath,
         remoteMfiServer = remoteMfiServer,
         remoteMfiToken = remoteMfiToken,
+        transport = transport,
+        wirelessHotspotMode = wirelessHotspotMode,
         identification = Iap2IdentificationConfig(
             name = "test",
             modelIdentifier = "test",

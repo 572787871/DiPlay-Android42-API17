@@ -1087,6 +1087,9 @@ class DiPlayActivity : ComponentActivity() {
             contentDescription = title
             isChecked = value
             minHeight = dp(56)
+            showText = false
+            textOn = ""
+            textOff = ""
             thumbTintList = ColorStateList.valueOf(ACCENT)
             setOnCheckedChangeListener { _, checked -> save(checked) }
         })
