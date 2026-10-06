@@ -5,6 +5,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbRequest
+import android.os.Build
 import android.util.Log
 import java.io.Closeable
 import java.nio.ByteBuffer
@@ -26,6 +27,7 @@ class NcmUsbBridge internal constructor(
     private val statusEndpoint: UsbEndpoint?,
     private val claimedInterfaces: List<UsbInterface>,
     descriptorHostMac: ByteArray?,
+    private val legacyRestore: (() -> Unit)? = null,
 ) : Closeable {
     private val descriptorMac = descriptorHostMac?.copyOf()
     val hostMac: ByteArray? get() = descriptorMac?.copyOf()
@@ -134,6 +136,7 @@ class NcmUsbBridge internal constructor(
                 // Best-effort release; the connection close below is authoritative.
             }
         }
+        runCatching { legacyRestore?.invoke() }
         connection.close()
         runCatching { requestToClose?.close() }
     }
@@ -298,9 +301,53 @@ class NcmUsbBridge internal constructor(
         private const val NANOS_PER_MILLISECOND = 1_000_000L
 
         /** Claims and activates the NCM control/data interfaces; owns the connection on success. */
-        fun open(connection: UsbDeviceConnection, function: NcmFunctionDiscovery.NcmFunction): NcmUsbBridge {
+        fun open(
+            connection: UsbDeviceConnection,
+            function: NcmFunctionDiscovery.NcmFunction,
+            configurationId: Int,
+            vendorId: Int,
+            diagnostics: (String) -> Unit = { Log.i(IphoneCarPlayConfiguration.TAG, it) },
+        ): NcmUsbBridge {
             val claimed = ArrayList<UsbInterface>(2)
+            var legacyRestore: (() -> Unit)? = null
+            fun log(message: String) {
+                diagnostics(message)
+            }
             try {
+                @Suppress("DEPRECATION")
+                val legacyEligible = LegacyNcmClaim.eligible(
+                    Build.VERSION.SDK_INT, Build.BOARD, Build.HARDWARE, Build.CPU_ABI, vendorId,
+                    function.control.interfaceClass, function.control.interfaceSubclass,
+                    function.data.interfaceClass,
+                )
+                fun describe(value: UsbInterface) =
+                    "${value.id}/${IphoneCarPlayConfiguration.alternateSetting(value)}" +
+                        " class=${value.interfaceClass} subclass=${value.interfaceSubclass} proto=${value.interfaceProtocol}"
+                log("ncm claim config=$configurationId control=${describe(function.control)} data=${describe(function.data)}" +
+                    " api=${Build.VERSION.SDK_INT} manufacturer=${Build.MANUFACTURER}" +
+                    " board=${Build.BOARD} hardware=${Build.HARDWARE} legacyEligible=$legacyEligible")
+                fun claim(value: UsbInterface): Boolean {
+                    var nativeOps: LegacyNcmClaim.Native? = null
+                    val trace: (String) -> Unit = { log("ncm claim iface=${describe(value)} $it") }
+                    return LegacyNcmClaim.claim(
+                        eligible = legacyEligible,
+                        framework = { force -> connection.claimInterface(value, force) },
+                        native = {
+                            try {
+                                LegacyNcmNative.operations(connection, value.id,
+                                    listOf(function.control.id, function.data.id), configurationId, trace).also { nativeOps = it }
+                            } catch (error: LinkageError) {
+                                trace("native unavailable: ${error.javaClass.simpleName}")
+                                null
+                            }
+                        },
+                        owned = {
+                            claimed.add(value)
+                            nativeOps?.let { ops -> legacyRestore = { ops.restore() } }
+                        },
+                        log = trace,
+                    )
+                }
                 val descriptorHostMac = readNcmHostMac(connection, function.control.id)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
@@ -310,37 +357,22 @@ class NcmUsbBridge internal constructor(
                 // same interface id, so it must be claimed once and switched with setInterface.
                 val sameInterface = function.control.id == function.data.id
                 val first = if (sameInterface) function.data else function.control
-                val firstClaimed = connection.claimInterface(first, true)
-                Log.i(
-                    IphoneCarPlayConfiguration.TAG,
-                    "claim iface=${first.id}/${IphoneCarPlayConfiguration.alternateSetting(first)} class=${first.interfaceClass}" +
-                        " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} ok=$firstClaimed",
-                )
+                val firstClaimed = claim(first)
                 if (!firstClaimed) {
                     throw IphoneUsbException.DeviceUnavailable(
                         "Android could not claim the NCM interface ${first.id}",
                     )
                 }
-                claimed.add(first)
                 if (!sameInterface) {
-                    val dataClaimed = connection.claimInterface(function.data, true)
-                    Log.i(
-                        IphoneCarPlayConfiguration.TAG,
-                        "claim iface=${function.data.id}/${IphoneCarPlayConfiguration.alternateSetting(function.data)}" +
-                            " class=${function.data.interfaceClass} ok=$dataClaimed",
-                    )
+                    val dataClaimed = claim(function.data)
                     if (!dataClaimed) {
                         throw IphoneUsbException.DeviceUnavailable(
                             "Android could not claim the NCM data interface ${function.data.id}",
                         )
                     }
-                    claimed.add(function.data)
                 }
                 val altSelected = selectUsbInterface(connection, function.data)
-                Log.i(
-                    IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${IphoneCarPlayConfiguration.alternateSetting(function.data)} ok=$altSelected",
-                )
+                log("ncm setInterface iface=${describe(function.data)} ok=$altSelected")
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
                         "Android could not select the NCM data alternate setting",
@@ -357,6 +389,7 @@ class NcmUsbBridge internal constructor(
                     function.statusIn,
                     claimed,
                     descriptorHostMac,
+                    legacyRestore,
                 )
             } catch (error: Throwable) {
                 for (usbInterface in claimed.asReversed()) {
@@ -366,6 +399,7 @@ class NcmUsbBridge internal constructor(
                         // The connection close below is authoritative.
                     }
                 }
+                runCatching { legacyRestore?.invoke() }
                 connection.close()
                 if (error is IphoneUsbException) throw error
                 throw IphoneUsbException.DeviceUnavailable("Android NCM open failed", error)

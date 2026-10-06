@@ -1421,7 +1421,7 @@ class CarPlayController(
         )
         val connection = usbManager.openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable("Could not open the iPhone NCM connection")
-        return NcmUsbBridge.open(connection, function)
+        return NcmUsbBridge.open(connection, function, configuration.id, device.vendorId, ::debugLog)
     }
 
     private fun runStack(usbSession: Iap2UsbSession, ncm: NcmUsbBridge) {
