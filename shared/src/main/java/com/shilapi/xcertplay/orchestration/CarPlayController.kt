@@ -5,7 +5,6 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
-import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
 import android.content.ComponentName
@@ -181,9 +180,15 @@ class CarPlayController(
     private val appContext = context.applicationContext
     private val diagnosticAttempt = diagnosticAttempts.incrementAndGet()
     private val diagnosticRun = AtomicInteger()
-    private val usbManager: UsbManager? = context.getSystemService(UsbManager::class.java)
-    private val bluetoothAdapter =
-        appContext.getSystemService(BluetoothManager::class.java)?.adapter
+    // Context.getSystemService(Class) is API 23.  The string-service form is
+    // available on Android 4.2 and avoids a verifier failure before a wired or
+    // wireless connection can even be started.
+    private val usbManager: UsbManager? =
+        context.getSystemService(Context.USB_SERVICE) as? UsbManager
+    // BluetoothManager was added in API 18.  Android 4.2 exposes the same
+    // adapter through the long-standing static accessor, so using it here
+    // keeps the controller loadable on API 17 as well as newer releases.
+    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private val iphoneHost by lazy {
         IphoneUsbHost(
             appContext,
@@ -254,7 +259,13 @@ class CarPlayController(
     @Volatile private var firstTcpWatchdog: FirstTcpWatchdog? = null
     private val startupTimer = java.util.concurrent.ScheduledThreadPoolExecutor(1) { task ->
         Thread(task, "diplay-first-tcp-timeout").apply { isDaemon = true }
-    }.apply { removeOnCancelPolicy = true }
+    }.apply {
+        // setRemoveOnCancelPolicy is API 21.  It is only an executor cleanup
+        // optimisation, not a connection requirement.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            removeOnCancelPolicy = true
+        }
+    }
     @Volatile private var wirelessDiagnostics: WirelessStartupDiagnostics? = null
     @Volatile private var bluetoothSocket: BluetoothSocket? = null
     @Volatile private var bluetoothStream: BluetoothRfcommDuplexStream? = null

@@ -72,7 +72,7 @@ internal object CenterMapOverlay {
         if (root != null) return true
         if (!aspect.isFinite() || aspect <= 0) return false
         if (!permitted(context)) return false
-        val windows = context.getSystemService(WindowManager::class.java) ?: return false
+        val windows = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return false
         val metrics = context.resources.displayMetrics
         val screenWidth = metrics.widthPixels
         val screenHeight = metrics.heightPixels
@@ -253,7 +253,10 @@ internal object CenterMapOverlay {
     fun hide() {
         val view = root ?: return
         root = null
-        runCatching { view.context.getSystemService(WindowManager::class.java)?.removeViewImmediate(view) }
+        runCatching {
+            (view.context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+                ?.removeViewImmediate(view)
+        }
         Log.i(TAG, "card hidden")
     }
 

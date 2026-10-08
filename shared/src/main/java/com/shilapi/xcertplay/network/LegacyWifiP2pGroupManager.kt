@@ -176,15 +176,26 @@ internal class LegacyWifiP2pGroupManager(
         activeChannel?.let { ch ->
             runCatching { ch.javaClass.getMethod("close").invoke(ch) }
         }
-        thread?.quitSafely()
+        thread?.let { worker ->
+            // quitSafely was added in API 18.  Android 4.2 still needs the
+            // P2P cleanup path to be able to release its group/channel.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                worker.quitSafely()
+            } else {
+                worker.quit()
+            }
+        }
         thread = null
     }
 
     private fun checkPrerequisites() {
-        if (
+        // Android 4.2 grants manifest permissions at install time and does not
+        // implement Context.checkSelfPermission (API 23).  Keep the runtime
+        // check on current Android, but never call that API on the CS55.
+        val locationDenied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             appContext.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
+                PackageManager.PERMISSION_GRANTED
+        if (locationDenied) {
             throw IOException("Allow precise Location for DiPlay before using Wi-Fi Direct")
         }
         val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager

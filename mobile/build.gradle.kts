@@ -16,11 +16,14 @@ android {
 
     defaultConfig {
         applicationId = "com.shihab.diplay"
-        minSdk = 19
+        // CS55's head unit runs Android 4.2.2 (API 17). Keep the app and every
+        // dependency on the same install baseline; runtime-only features remain
+        // guarded in the compatibility layer.
+        minSdk = 17
         targetSdk = 37
         multiDexEnabled = true
-        versionCode = 34
-        versionName = "0.2.14-legacy.1"
+        versionCode = 35
+        versionName = "0.2.14-legacy.api17.1"
 
     }
 

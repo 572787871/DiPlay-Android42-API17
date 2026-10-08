@@ -1,12 +1,14 @@
 package com.shilapi.xcertplay
 
 import android.app.Activity
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -316,7 +318,11 @@ class CarPlayVideoActivity : Activity() {
         .joinToString(" <- ") { "${it.javaClass.simpleName}(${it.message?.replace(Regex("\\w+://\\S+"), "<url>")})" }
 
     private fun playbackNetworkSummary(): String {
-        val manager = getSystemService(ConnectivityManager::class.java)
+        // activeNetwork/getNetworkCapabilities and typed getSystemService are
+        // API 23 APIs.  Video playback itself has an older fallback, so keep
+        // diagnostics from crashing Android 4.2 when that fallback is used.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return "network=legacy"
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val network = manager?.activeNetwork
         val capabilities = network?.let(manager::getNetworkCapabilities)
         if (network == null || capabilities == null) return "network=none"

@@ -154,7 +154,7 @@ internal object CarPlayMediaKeys {
     // would; only the start counts, so a car source picked while the iPhone plays on is not undone.
     private fun regainFocusLocked() {
         if (focusHeld) return
-        val audio = appContext?.getSystemService(AudioManager::class.java) ?: return
+        val audio = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val result = if (Build.VERSION.SDK_INT >= 26) {
             audio.requestAudioFocus(focusRequest ?: return)
         } else {
@@ -178,7 +178,7 @@ internal object CarPlayMediaKeys {
         val expectedController = controller ?: return
         val owner = Any().also { focusOwner = it }
         focusEventRevision = 0L
-        val audio = context.getSystemService(AudioManager::class.java)
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val listener = AudioManager.OnAudioFocusChangeListener { change ->
             onFocusChanged(expectedController, owner, change)
         }
@@ -253,7 +253,7 @@ internal object CarPlayMediaKeys {
         nowPlaying = CarPlayNowPlaying()
         artwork = null
         artworkCache.clear()
-        val audio = appContext?.getSystemService(AudioManager::class.java)
+        val audio = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (Build.VERSION.SDK_INT >= 26) focusRequest?.let { audio?.abandonAudioFocusRequest(it) }
         else legacyFocusListener?.let {
             @Suppress("DEPRECATION")

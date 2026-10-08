@@ -1,0 +1,58 @@
+name: Android 4.2 API17 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - api17-cs55
+
+permissions:
+  contents: read
+
+jobs:
+  build-api17-armv7:
+    name: Build API17 armeabi-v7a APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android 37 and the API17-capable NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;23.1.7779620"
+
+      - name: Build debug APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :mobile:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify API17 and ARMv7 packaging
+        run: |
+          apk=mobile/build/outputs/apk/debug/mobile-debug.apk
+          test -f "$apk"
+          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$apk" | tee apk-badging.txt
+          grep -q "sdkVersion:'17'" apk-badging.txt
+          unzip -l "$apk" | tee apk-contents.txt
+          grep -q 'lib/armeabi-v7a/' apk-contents.txt
+          ! grep -q 'lib/arm64-v8a/' apk-contents.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiPlay-Android42-API17-armeabi-v7a
+          path: mobile/build/outputs/apk/debug/mobile-debug.apk
+          if-no-files-found: error

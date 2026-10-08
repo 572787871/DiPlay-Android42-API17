@@ -6,24 +6,29 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        minSdk = 19
+        minSdk = 17
         targetSdk = 37
         multiDexEnabled true
 
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'
+            // The target CS55 head unit is a 32-bit ARM Android 4.2 device.
+            // Building only this ABI also keeps the legacy package small and
+            // prevents an API-17 build from depending on unavailable host ABIs.
+            abiFilters 'armeabi-v7a'
         }
 
         externalNativeBuild {
             ndkBuild {
-                arguments 'APP_PLATFORM=android-19'
+                arguments 'APP_PLATFORM=android-17'
             }
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    // NDK r25c is the last supported toolchain that still targets Android 4.4 (API 19).
-    ndkVersion = '25.2.9519653'
+    // r25 intentionally rejects targets below API 19.  The CS55 head unit is
+    // Android 4.2.2/API 17, so use r23: it is the newest installed NDK that
+    // still emits genuinely API-17-loadable armeabi-v7a libraries.
+    ndkVersion = '23.1.7779620'
     externalNativeBuild {
         ndkBuild {
             path = file('src/main/jni/Android.mk')
