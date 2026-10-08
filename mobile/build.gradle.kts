@@ -30,10 +30,11 @@ check(externalSigningValues.all { it.isNullOrBlank() } || hasExternalSigning) {
 
 android {
     namespace = "com.shilapi.xcertplay"
-    // Keep this in sync with the reproducible GitHub Actions SDK. This affects
-    // compilation only; minSdk below remains the Android 4.2/API17 baseline.
+    // Keep this in sync with the common module and the reproducible GitHub
+    // Actions SDK. This affects compilation only; minSdk below remains the
+    // Android 4.2/API17 baseline.
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     defaultConfig {

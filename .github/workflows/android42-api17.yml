@@ -26,7 +26,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android 36 and the API17-capable NDK
+      - name: Install Android 37 and the API17-capable NDK
         run: |
           sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
@@ -34,7 +34,7 @@ jobs:
           export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$PATH"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager \
-            "platforms;android-36" \
+            "platforms;android-37" \
             "build-tools;36.0.0" \
             "ndk;23.1.7779620"
 
@@ -121,14 +121,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android 36 and the API17-capable NDK
+      - name: Install Android 37 and the API17-capable NDK
         run: |
           sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
           export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$PATH"
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;23.1.7779620"
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;23.1.7779620"
 
       - name: Prepare protected standalone inputs
         shell: bash
