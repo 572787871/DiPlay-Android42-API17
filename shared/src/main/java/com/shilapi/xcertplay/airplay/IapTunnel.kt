@@ -78,10 +78,7 @@ class IapTunnel(
     }
 
     private fun bindAny(): ServerSocket =
-        ServerSocket().apply {
-            reuseAddress = true
-            bind(InetSocketAddress(bindAddress, 0))
-        }
+        AirPlaySocketBinder.server(bindAddress, "AirPlay iAP tunnel")
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

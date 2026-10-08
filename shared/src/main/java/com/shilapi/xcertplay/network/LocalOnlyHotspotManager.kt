@@ -15,8 +15,8 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
-import java.net.SocketException
 import java.net.UnknownHostException
+import java.net.SocketException
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.Executor
@@ -90,7 +90,7 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                 deadlineNanos = deadlineNanos,
             )
             val liveRadio = awaitRadioInfo(radioInfo, apInterface, configuration, attempt, deadlineNanos)
-            if (liveRadio?.frequencyMHz?.let { it !in 5160..5895 } ?: (configuration.bandLabel != "5 GHz")) {
+            if (!LocalHotspotRadioPolicy.accepts(Build.VERSION.SDK_INT, liveRadio?.frequencyMHz, configuration.bandLabel)) {
                 throw IOException("This firmware did not provide the requested 5 GHz local hotspot; choose Wi-Fi Direct or Car hotspot")
             }
 
@@ -110,13 +110,9 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
             // have neither a live callback nor working WEXT, so there the advertised
             // channel degrades to the configuration's, the one this manager requested,
             // or 36 — in that order — and the phone joining is the real verification.
-            val advertisedChannel = when {
-                liveRadio != null -> wifiFrequencyMhzToChannel(liveRadio.frequencyMHz)
-                    ?: configuration.channel.takeIf { it > 0 } ?: requestedChannel ?: 36
-                configuration.channel > 0 -> configuration.channel
-                requestedChannel != null -> requestedChannel
-                else -> 36
-            }
+            val advertisedChannel = LocalHotspotRadioPolicy.channel(
+                Build.VERSION.SDK_INT, liveRadio?.frequencyMHz, configuration.channel, requestedChannel,
+            )
             if (liveRadio == null && configuration.channel == 0) {
                 onDiagnostic("LocalOnlyHotspot: advertising channel $advertisedChannel (band ${configuration.bandLabel}) without live verification")
             }
@@ -252,9 +248,14 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                         return LocalOnlyHotspotRadioInfo.Radio(ap.bssid ?: configuration.bssid, settled)
                     }
                     if (System.nanoTime() - legacyStart >= TimeUnit.MILLISECONDS.toNanos(
-                            if (configuration.bandLabel == "5 GHz") 1500 else 6000
+                            if (LocalHotspotRadioPolicy.supportsSystemBand(Build.VERSION.SDK_INT) ||
+                                configuration.bandLabel == "5 GHz") 1500 else 6000
                         )
                     ) {
+                        if (LocalHotspotRadioPolicy.supportsSystemBand(Build.VERSION.SDK_INT)) {
+                            onDiagnostic("LocalOnlyHotspot: legacy system AP ready; channel unreadable, advertising automatic channel 0")
+                            return null
+                        }
                         if (configuration.bandLabel == "5 GHz") {
                             // Every BYD Qualcomm tested answers WEXT with errno 95 and
                             // Android 11/12 has no live LOHS channel callback, so an
@@ -566,7 +567,8 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
             if (networkInterface != null) {
                 networkInterface.hotspotAddress()?.let { hostAddress ->
                     val interfaceBssid = networkInterface.interfaceBssid()
-                    if (bssid == null && interfaceBssid == null) {
+                    if (bssid == null && interfaceBssid == null &&
+                        !LocalHotspotRadioPolicy.supportsSystemBand(Build.VERSION.SDK_INT)) {
                         return@let
                     }
                     return ApInterface(
@@ -629,6 +631,9 @@ class LocalOnlyHotspotManager(context: Context, private val onDiagnostic: (Strin
                 .firstNotNullOfOrNull { it.toEui64MacAddress() }
 
     private fun NetworkInterface.hotspotAddress(): InetAddress? {
+        if (LocalHotspotRadioPolicy.supportsSystemBand(Build.VERSION.SDK_INT)) {
+            return wirelessHostAddress(Collections.list(inetAddresses), index, preferIpv4 = true)
+        }
         var ipv4: InetAddress? = null
         for (address in Collections.list(inetAddresses)) {
             if (address is Inet6Address && address.isLinkLocalAddress) {

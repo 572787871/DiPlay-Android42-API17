@@ -21,7 +21,10 @@ object NcmFunctionDiscovery {
 
     data class NcmFunction(
         val control: UsbInterface,
+        /** Data alternate setting that exposes the NCM bulk endpoints (normally alt=1). */
         val data: UsbInterface,
+        /** Same data interface at alt=0 when exposed; legacy Android should claim this first. */
+        val dataClaim: UsbInterface,
         val statusIn: UsbEndpoint?,
         val bulkIn: UsbEndpoint,
         val bulkOut: UsbEndpoint,
@@ -40,13 +43,16 @@ object NcmFunctionDiscovery {
             .minByOrNull { if (IphoneCarPlayConfiguration.alternateSetting(it) == DATA_ALTERNATE_SETTING) 0 else 1 }
             ?: return null
         val endpoints = bulkEndpoints(data) ?: return null
+        val dataClaim = interfaces(configuration).firstOrNull {
+            it.id == data.id && IphoneCarPlayConfiguration.alternateSetting(it) == 0
+        } ?: data
         val statusIn = (0 until control.endpointCount)
             .map(control::getEndpoint)
             .singleOrNull {
                 it.direction == UsbConstants.USB_DIR_IN &&
                     it.type == UsbConstants.USB_ENDPOINT_XFER_INT
             }
-        return NcmFunction(control, data, statusIn, endpoints.first, endpoints.second)
+        return NcmFunction(control, data, dataClaim, statusIn, endpoints.first, endpoints.second)
     }
 
     private fun interfaces(configuration: CarPlayUsbConfiguration): List<UsbInterface> = configuration.interfaces

@@ -55,6 +55,8 @@ data class Iap2IdentificationConfig(
     val vehicleStatusEnabled: Boolean = false,
     /** The charging inlets declared with [vehicleStatusEnabled]. */
     val chargingConnectors: EvChargingConnectors = EvChargingConnectors.CCS2_TYPE2,
+    /** Also offer wheel speed ($PASCD) in the location component; needs [locationInformationEnabled]. */
+    val vehicleSpeedEnabled: Boolean = false,
 ) {
     constructor(
         name: String,
@@ -100,6 +102,35 @@ data class Iap2IdentificationConfig(
         require(carPlayUsbInterfaceNumber in 0..0xff) {
             "carPlayUsbInterfaceNumber must be in 0..255"
         }
+    }
+}
+
+/** The two iAP2 links used during one wireless CarPlay connection have different responsibilities. */
+internal enum class Iap2WirelessLinkRole {
+    /** Short-lived RFCOMM link used only to authenticate and hand the iPhone the Wi-Fi endpoint. */
+    BLUETOOTH_BOOTSTRAP,
+
+    /** Long-lived iAP2 DataStream inside the active Wi-Fi AirPlay session. */
+    RUNTIME_TUNNEL,
+}
+
+/**
+ * Builds identification for one wireless link. Long-lived accessory data must not be advertised on
+ * Bluetooth: iOS can bind Location or Vehicle to that endpoint and reject the same data on Wi-Fi
+ * after RFCOMM closes.
+ */
+internal fun Iap2IdentificationConfig.forWirelessLink(
+    role: Iap2WirelessLinkRole,
+    wirelessIdentification: Iap2WirelessIdentification,
+): Iap2IdentificationConfig {
+    val wirelessConfig = copy(wireless = wirelessIdentification)
+    return when (role) {
+        Iap2WirelessLinkRole.BLUETOOTH_BOOTSTRAP -> wirelessConfig.copy(
+            locationInformationEnabled = false,
+            vehicleStatusEnabled = false,
+            vehicleSpeedEnabled = false,
+        )
+        Iap2WirelessLinkRole.RUNTIME_TUNNEL -> wirelessConfig
     }
 }
 
@@ -246,6 +277,7 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                         string(1, config.name)
                         void(17)
                         void(18)
+                        if (config.vehicleSpeedEnabled) void(20)
                     }
                 }
                 group(30) {

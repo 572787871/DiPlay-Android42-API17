@@ -106,9 +106,13 @@ class Ch341UsbHost(
         val connection = usbManager.openDevice(device)
             ?: throw I2cTransportException.DeviceUnavailable("UsbManager could not open the CH341 device")
 
-        if (!connection.claimInterface(endpoints.usbInterface, true)) {
+        val claim = LegacyUsbHostCompat.claim(connection, endpoints.usbInterface)
+        if (!claim.claimed) {
             connection.close()
-            throw I2cTransportException.DeviceUnavailable("Could not claim CH341 USB interface")
+            throw I2cTransportException.DeviceUnavailable(
+                "Could not claim CH341 USB interface" +
+                    (claim.errno?.let { " (usbfs errno $it)" } ?: ""),
+            )
         }
         return Ch341UsbSession(connection, endpoints.usbInterface, endpoints.input, endpoints.output)
     }
@@ -121,11 +125,13 @@ class Ch341UsbHost(
 
     private fun permissionPendingIntent(): PendingIntent {
         val intent = Intent(permissionAction).setPackage(appContext.packageName)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         return PendingIntent.getBroadcast(
             appContext,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            flags,
         )
     }
 

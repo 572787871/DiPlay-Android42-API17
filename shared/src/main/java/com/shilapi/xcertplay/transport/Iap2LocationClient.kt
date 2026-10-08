@@ -29,6 +29,9 @@ data class CarPlayLocationFix(
 
 /** Supplies location data only while the phone has subscribed to iAP2 LocationInformation. */
 interface Iap2LocationProvider : AutoCloseable {
+    /** The 0xFFFA parameter ids, i.e. the sentence types the iPhone asked for; called before [start]. */
+    fun onRequested(components: Set<Int>) = Unit
+
     /** Starts location updates and returns whether at least one source was subscribed. */
     fun start(): Boolean
 
@@ -74,10 +77,11 @@ object NmeaLocationEncoder {
             ?.takeIf { it.isFinite() && it >= 0 }
             ?.let { format("%.2f", it * KNOTS_PER_METER_PER_SECOND) }
             ?: "0.00"
+        // Without a GPS direction (for example while parked) the course stays empty: 0.00 would say north.
         val course = fix.bearingDegrees
             ?.takeIf { it.isFinite() }
             ?.let { format("%.2f", it) }
-            ?: "0.00"
+            .orEmpty()
         val rmcBody = "GPRMC,$time,A,${latitude.value},${latitude.hemisphere}," +
             "${longitude.value},${longitude.hemisphere},$speedKnots,$course,$date,,"
 
@@ -131,10 +135,93 @@ object NmeaLocationEncoder {
     private const val MINUTE_ROUNDING_TOLERANCE = 0.00005
 }
 
+/**
+ * Accessory side of iAP2 LocationInformation on one link: starts on 0xFFFA, sends the latest fix
+ * on every [tick] (about once a second), and stops on 0xFFFC. Subscription state belongs to this
+ * iAP2 link: a request received on Bluetooth must never authorize output on the Wi-Fi tunnel.
+ */
+class Iap2LocationReporter(
+    private val provider: Iap2LocationProvider?,
+    private val onProgress: (String) -> Unit,
+    private val nanoTime: () -> Long = System::nanoTime,
+) {
+    private var active = false
+    private var sentLogged = false
+    private var lastAttemptNanos = 0L
+
+    /** Handles 0xFFFA/0xFFFC; returns false for any other message. */
+    fun handle(frame: Iap2Frame, send: (Iap2Frame) -> Unit): Boolean = when (frame.messageId) {
+        Iap2LocationMessages.START_LOCATION_INFORMATION -> {
+            val components = Iap2LocationMessages.requestedComponents(frame)
+            onProgress("iap2 rx=0xfffa start-location-information components=$components")
+            provider?.onRequested(components)
+            start(send)
+            true
+        }
+        Iap2LocationMessages.STOP_LOCATION_INFORMATION -> {
+            onProgress("iap2 rx=0xfffc stop-location-information")
+            active = false
+            sentLogged = false
+            provider?.stop()
+            true
+        }
+        else -> false
+    }
+
+    /** Sends the latest fix once a second while this link has an active request. */
+    fun tick(send: (Iap2Frame) -> Unit) {
+        if (active && sinceAttemptMillis() >= POLL_INTERVAL_MILLIS) sendLatest(send)
+    }
+
+    /** Wakes the loop when the next requested fix is due. */
+    fun pollTimeout(remainingMillis: Long): Long =
+        if (active) min(remainingMillis, (POLL_INTERVAL_MILLIS - sinceAttemptMillis()).coerceAtLeast(1))
+        else remainingMillis
+
+    private fun sinceAttemptMillis() = (nanoTime() - lastAttemptNanos) / 1_000_000
+
+    private fun start(send: (Iap2Frame) -> Unit) {
+        active = startProvider()
+        sentLogged = false
+        if (active) sendLatest(send)
+    }
+
+    private fun startProvider(): Boolean {
+        if (provider == null) return false
+        return try {
+            provider.start().also { started -> if (!started) onProgress("iap2 location provider did not start") }
+        } catch (error: Exception) {
+            onProgress("iap2 location provider start failed: ${error.message}")
+            false
+        }
+    }
+
+    private fun sendLatest(send: (Iap2Frame) -> Unit) {
+        lastAttemptNanos = nanoTime()
+        val sentence = provider?.latestNmea() ?: return
+        send(Iap2LocationMessages.locationInformation(sentence))
+        if (!sentLogged) {
+            sentLogged = true
+            onProgress("iap2 tx=0xfffb location-information")
+        }
+    }
+
+    private companion object {
+        const val POLL_INTERVAL_MILLIS = 1_000L
+    }
+}
+
 object Iap2LocationMessages {
     const val START_LOCATION_INFORMATION = 0xfffa
     const val LOCATION_INFORMATION = 0xfffb
     const val STOP_LOCATION_INFORMATION = 0xfffc
+
+    /** 0xFFFA selector for `$PASCD`; the matching IdentificationInformation flag is 20. */
+    const val VEHICLE_SPEED_DATA = 4
+
+    /** The parameter ids of a 0xFFFA request (the sentence types asked for), or none if unreadable. */
+    fun requestedComponents(frame: Iap2Frame): Set<Int> =
+        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrDefault(emptySet())
 
     fun locationInformation(nmeaSentence: String): Iap2Frame {
         require(nmeaSentence.isNotEmpty()) { "NMEA sentence must not be empty" }

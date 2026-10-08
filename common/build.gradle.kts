@@ -19,6 +19,11 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // The UI suite covers several SDKs and locale-specific resource sandboxes.
+        unitTests.all { it.maxHeapSize = "1g" }
+    }
 }
 
 dependencies {
@@ -27,6 +32,12 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.ui)
     testImplementation(libs.junit)
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.mockito:mockito-core:5.20.0")
+    testImplementation(libs.jmdns)
 }

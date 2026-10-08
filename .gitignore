@@ -6,6 +6,7 @@
 # Gradle and local tooling
 .gradle/
 .kotlin/
+.android-sdk/
 build/
 local.properties
 
@@ -25,6 +26,7 @@ Thumbs.db
 
 # Local beta credentials and release signing (never commit)
 .private/
+auth-assets/
 *.jks
 *.keystore
 release-signing.properties

@@ -5,6 +5,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbRequest
+import android.os.Build
 import android.util.Log
 import java.io.Closeable
 import java.nio.ByteBuffer
@@ -20,13 +21,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * calls may block and must run away from the Android main thread.
  */
 class NcmUsbBridge internal constructor(
-    private val connection: UsbDeviceConnection,
+    private val sharedConnection: SharedUsbDeviceConnection,
     private val outEndpoint: UsbEndpoint,
     private val inEndpoint: UsbEndpoint,
     private val statusEndpoint: UsbEndpoint?,
     private val claimedInterfaces: List<UsbInterface>,
+    private val useAsyncRead: Boolean,
     descriptorHostMac: ByteArray?,
+    private val onDiagnostic: (String) -> Unit = {},
 ) : Closeable {
+    private val connection: UsbDeviceConnection
+        get() = sharedConnection.connection
     private val descriptorMac = descriptorHostMac?.copyOf()
     val hostMac: ByteArray? get() = descriptorMac?.copyOf()
     private val stateLock = Any()
@@ -44,10 +49,11 @@ class NcmUsbBridge internal constructor(
     // Bulk IN uses one persistent async request: bulkTransfer() pins its byte[] in a JNI critical
     // section for the whole wait, which blocks ART's GC thread flip and, with it, every other USB
     // transfer (seen as ~0.8 s stalls of video and audio). A timed-out request stays queued, so no
-    // data is lost between calls. This is the only requestWait() user on this connection.
-    private val directReadBuffer = ByteBuffer.allocateDirect(READ_CHUNK_BYTES)
+    // data is lost between calls. SharedUsbDeviceConnection routes USBMUX/NCM completions.
+    private val directReadBuffer = ByteBuffer.allocateDirect(usbTransferSize(Build.VERSION.SDK_INT, READ_CHUNK_BYTES))
     private var readRequest: UsbRequest? = null
     private var readQueued = false
+    private val readQueuePolicy = UsbReadQueuePolicy()
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
     private val statusThread = statusEndpoint?.let { endpoint ->
         Thread({ drainStatus(endpoint) }, "ncm-status-in").apply {
@@ -65,7 +71,9 @@ class NcmUsbBridge internal constructor(
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
         val block = Ntb16Codec.build(frame, sequence)
-        val transferred = connection.bulkTransfer(outEndpoint, block, block.size, timeoutMillis)
+        val transferred = writeUsbChunks(block.size, Build.VERSION.SDK_INT, timeoutMillis) { offset, count, timeout ->
+            connection.bulkTransfer(outEndpoint, block, offset, count, timeout)
+        }
         // Before StartCarPlaySession the phone keeps the NCM data path NAKed. Android reports the
         // resulting timeout as -1; it is not a detach and later packets must be allowed to retry.
         if (transferred <= 0) {
@@ -134,7 +142,8 @@ class NcmUsbBridge internal constructor(
                 // Best-effort release; the connection close below is authoritative.
             }
         }
-        connection.close()
+        sharedConnection.release()
+        requestToClose?.let(sharedConnection::forget)
         runCatching { requestToClose?.close() }
     }
 
@@ -218,7 +227,9 @@ class NcmUsbBridge internal constructor(
     }
 
     private fun readChunk(timeoutMillis: Long): Int? {
+        if (!useAsyncRead) return readChunkSynchronously(timeoutMillis)
         checkOpen()
+        var acceptedFallback: UsbReadQueueResult? = null
         val request = try {
             // Publish and queue atomically with close(), so detach cannot miss a new request.
             synchronized(stateLock) {
@@ -232,22 +243,40 @@ class NcmUsbBridge internal constructor(
                 }
                 if (!readQueued) {
                     directReadBuffer.clear()
-                    if (!queueUsbRequest(current, directReadBuffer)) throw failSession("Android could not queue the NCM read request")
+                    val queued = readQueuePolicy.queue(directReadBuffer, ::checkOpenLocked) {
+                        sharedConnection.queue(current, it)
+                    }
+                    if (!queued.queued) throw failSession(
+                        "Android could not queue the NCM read request (api=${Build.VERSION.SDK_INT} " +
+                            "endpoint=${describeUsbEndpoint(inEndpoint)} firstBytes=${queued.firstBytes} " +
+                            "fallbackBytes=${queued.fallbackBytes ?: "not_attempted"})",
+                    )
                     readQueued = true
+                    if (queued.fallbackBytes != null) acceptedFallback = queued
                 }
                 current
             }
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
         }
+        // Emit outside stateLock; diagnostic callbacks must not affect queue or close behavior.
+        acceptedFallback?.let { queued ->
+            runCatching {
+                onDiagnostic(
+                    "NCM read queue compatibility fallback api=${Build.VERSION.SDK_INT} " +
+                        "endpoint=${describeUsbEndpoint(inEndpoint)} firstBytes=${queued.firstBytes} " +
+                        "fallbackBytes=${queued.fallbackBytes}",
+                )
+            }
+        }
         try {
             val completed = try {
-                waitForUsbRequest(connection, timeoutMillis)
+                sharedConnection.await(request, timeoutMillis)
             } catch (_: TimeoutException) {
                 // Nothing arrived yet; the request stays queued for the next call. USBMUX owns
                 // authoritative detach/failure detection for the same phone.
                 return null
-            } ?: throw failSession("Android returned no NCM read request")
+            }
             if (completed !== request) throw failSession("Android completed an unexpected NCM request")
             readQueued = false
             val transferred = directReadBuffer.position()
@@ -259,6 +288,17 @@ class NcmUsbBridge internal constructor(
             throw error
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
+        }
+    }
+
+    private fun readChunkSynchronously(timeoutMillis: Long): Int? {
+        checkOpen()
+        val timeout = timeoutMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+        return try {
+            connection.bulkTransfer(inEndpoint, readBuffer, readBuffer.size, timeout)
+                .takeIf { it > 0 }
+        } catch (error: RuntimeException) {
+            throw failSession("NCM synchronous read failed", error)
         }
     }
 
@@ -297,53 +337,81 @@ class NcmUsbBridge internal constructor(
         private const val MAX_QUEUED_BYTES = 1 shl 20
         private const val NANOS_PER_MILLISECOND = 1_000_000L
 
-        /** Claims and activates the NCM control/data interfaces; owns the connection on success. */
-        fun open(connection: UsbDeviceConnection, function: NcmFunctionDiscovery.NcmFunction): NcmUsbBridge {
+        /** Claims NCM while retaining the caller's shared USB connection. */
+        internal fun open(
+            sharedConnection: SharedUsbDeviceConnection,
+            function: NcmFunctionDiscovery.NcmFunction,
+            expectedConfiguration: Int,
+            useAsyncRead: Boolean = true,
+            onDiagnostic: (String) -> Unit = {},
+        ): NcmUsbBridge {
+            val connection = sharedConnection.connection
             val claimed = ArrayList<UsbInterface>(2)
             try {
+                val activeConfiguration = LegacyUsbHostCompat.activeConfiguration(connection)
+                if (activeConfiguration != null && activeConfiguration != expectedConfiguration) {
+                    throw IphoneUsbException.DeviceUnavailable(
+                        "USB configuration changed before NCM open: expected=$expectedConfiguration " +
+                            "activeConfig=$activeConfiguration",
+                    )
+                }
+                Log.i(
+                    IphoneCarPlayConfiguration.TAG,
+                    "ncm opening activeConfig=${activeConfiguration ?: "unknown"}",
+                )
                 val descriptorHostMac = readNcmHostMac(connection, function.control.id)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "ncm descriptor hostMac=${descriptorHostMac?.macString() ?: "unavailable"}",
                 )
-                // Apple's Ethernet function exposes control and data as alternate settings of the
-                // same interface id, so it must be claimed once and switched with setInterface.
+                // The Android 7 compatible build claims the control interface first and then
+                // claims the endpoint-bearing data alternate directly. Keep that as the primary
+                // path; alt=0 is retained only as a fallback for broken vendor USB stacks.
                 val sameInterface = function.control.id == function.data.id
                 val first = if (sameInterface) function.data else function.control
-                val firstClaimed = connection.claimInterface(first, true)
+                val firstClaim = LegacyUsbHostCompat.claim(connection, first)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "claim iface=${first.id}/${IphoneCarPlayConfiguration.alternateSetting(first)} class=${first.interfaceClass}" +
-                        " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} ok=$firstClaimed",
+                        " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} " +
+                        "ok=${firstClaim.claimed} errno=${firstClaim.errno ?: "none"}",
                 )
-                if (!firstClaimed) {
+                if (!firstClaim.claimed) {
                     throw IphoneUsbException.DeviceUnavailable(
-                        "Android could not claim the NCM interface ${first.id}",
+                        "Android could not claim the NCM interface ${first.id}" +
+                            (firstClaim.errno?.let { " (usbfs errno $it)" } ?: "") +
+                            " activeConfig=${activeConfiguration ?: "unknown"}",
                     )
                 }
                 claimed.add(first)
                 if (!sameInterface) {
-                    val dataClaimed = connection.claimInterface(function.data, true)
+                    val dataClaim = LegacyUsbHostCompat.claim(connection, function.data)
+                    val dataAlt = IphoneCarPlayConfiguration.alternateSetting(function.data)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
-                        "claim iface=${function.data.id}/${IphoneCarPlayConfiguration.alternateSetting(function.data)}" +
-                            " class=${function.data.interfaceClass} ok=$dataClaimed",
+                        "claim data iface=${function.data.id}/$dataAlt" +
+                            " class=${function.data.interfaceClass} " +
+                            "ok=${dataClaim.claimed} errno=${dataClaim.errno ?: "none"}",
                     )
-                    if (!dataClaimed) {
+                    if (!dataClaim.claimed) {
                         throw IphoneUsbException.DeviceUnavailable(
-                            "Android could not claim the NCM data interface ${function.data.id}",
+                            "Android could not claim the NCM data interface ${function.data.id}" +
+                                (dataClaim.errno?.let { " (usbfs errno $it)" } ?: "") +
+                                " activeConfig=${activeConfiguration ?: "unknown"}",
                         )
                     }
                     claimed.add(function.data)
                 }
-                val altSelected = selectUsbInterface(connection, function.data)
+                val altSelection = LegacyUsbHostCompat.select(connection, function.data)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${IphoneCarPlayConfiguration.alternateSetting(function.data)} ok=$altSelected",
+                    "setInterface iface=${function.data.id}/${IphoneCarPlayConfiguration.alternateSetting(function.data)} " +
+                        "ok=${altSelection.selected} errno=${altSelection.errno ?: "none"}",
                 )
-                if (!altSelected) {
+                if (!altSelection.selected) {
                     throw IphoneUsbException.DeviceUnavailable(
-                        "Android could not select the NCM data alternate setting",
+                        "Android could not select the NCM data alternate setting" +
+                            (altSelection.errno?.let { " (usbfs errno $it)" } ?: ""),
                     )
                 }
                 Log.i(
@@ -351,12 +419,14 @@ class NcmUsbBridge internal constructor(
                     "ncm status endpoint=${function.statusIn?.address?.let { "0x${it.toString(16)}" } ?: "none"}",
                 )
                 return NcmUsbBridge(
-                    connection,
-                    function.bulkOut,
-                    function.bulkIn,
-                    function.statusIn,
-                    claimed,
-                    descriptorHostMac,
+                    sharedConnection = sharedConnection,
+                    outEndpoint = function.bulkOut,
+                    inEndpoint = function.bulkIn,
+                    statusEndpoint = function.statusIn,
+                    claimedInterfaces = claimed,
+                    useAsyncRead = useAsyncRead,
+                    descriptorHostMac = descriptorHostMac,
+                    onDiagnostic = onDiagnostic,
                 )
             } catch (error: Throwable) {
                 for (usbInterface in claimed.asReversed()) {
@@ -366,7 +436,7 @@ class NcmUsbBridge internal constructor(
                         // The connection close below is authoritative.
                     }
                 }
-                connection.close()
+                sharedConnection.release()
                 if (error is IphoneUsbException) throw error
                 throw IphoneUsbException.DeviceUnavailable("Android NCM open failed", error)
             }

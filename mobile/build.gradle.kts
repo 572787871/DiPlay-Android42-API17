@@ -5,6 +5,8 @@ plugins {
 // Optional local-only input. CI and ordinary source builds contain no accessory identity.
 val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
     .orNull?.let { file(it).canonicalFile }
+    ?: rootProject.file(".private/runtime-assets").takeIf { it.isDirectory }?.canonicalFile
+    ?: rootProject.file("auth-assets").takeIf { it.isDirectory }?.canonicalFile
 
 android {
     namespace = "com.shilapi.xcertplay"
@@ -17,8 +19,8 @@ android {
         minSdk = 19
         targetSdk = 37
         multiDexEnabled = true
-        versionCode = 26
-        versionName = "0.2.7"
+        versionCode = 34
+        versionName = "0.2.14-legacy.1"
 
     }
 
@@ -46,7 +48,7 @@ android {
             optimization {
                 enable = false
             }
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (signingConfigs.getByName("release").storeFile?.isFile == true) { signingConfigs.getByName("release") } else { signingConfigs.getByName("debug") }
         }
     }
     compileOptions {
@@ -107,4 +109,10 @@ tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
+}
+
+tasks.register("assembleStandaloneRelease") {
+    group = "build"
+    description = "Build a signed standalone APK with explicitly provisioned authentication."
+    dependsOn(verifyStandaloneAuthentication, "assembleRelease")
 }

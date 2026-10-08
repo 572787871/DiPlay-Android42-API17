@@ -28,6 +28,12 @@ class LocalOnlyHotspotManagerTest {
     @Test fun cancelledStartupStillClosesALateSystemReservation() = lateReservation(cancel = true)
     @Test fun timedOutStartupStillClosesALateSystemReservation() = lateReservation(cancel = false)
 
+    @Test @Config(sdk = [26, 27])
+    fun androidEightClosesLateReservationAfterCancellation() = lateReservation(cancel = true)
+
+    @Test @Config(sdk = [26, 27])
+    fun androidEightClosesLateReservationAfterTimeout() = lateReservation(cancel = false)
+
     @Test @Config(sdk = [33])
     fun android13RequestsFiveGhzAndClosesLateCustomReservation() {
         val radio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(WifiManager::class.java)) as Radio

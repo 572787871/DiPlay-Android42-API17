@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-sdk
+        tools:overrideLibrary="androidx.media3.exoplayer.hls, androidx.media3.exoplayer, androidx.media3.common, androidx.media3.container, androidx.media3.datasource, androidx.media3.decoder, androidx.media3.extractor, androidx.media3.database, androidx.media3.session, androidx.media3.ui" />
+
     <application
         android:name="androidx.multidex.MultiDexApplication"
         android:allowBackup="false"
@@ -12,7 +15,12 @@
         android:localeConfig="@xml/locales_config"
         android:roundIcon="@drawable/ic_carplay"
         android:supportsRtl="true"
+        android:resizeableActivity="true"
         android:theme="@style/Theme.Xcertplay">
+
+        <meta-data
+            android:name="android.allow_multiple_resumed_activities"
+            android:value="true" />
 
         <receiver
             android:name="com.shilapi.xcertplay.BootReceiver"
