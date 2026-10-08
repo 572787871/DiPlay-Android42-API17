@@ -2,6 +2,12 @@ name: Android 4.2 API17 APK
 
 on:
   workflow_dispatch:
+    inputs:
+      standalone:
+        description: 'Build a standalone APK with the repository secret DIPLAY_AUTH_ASSETS_ZIP_B64'
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - api17-cs55
@@ -38,13 +44,43 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;23.1.7779620"
 
-      - name: Build debug APK
+      - name: Prepare authorized standalone authentication assets
+        if: ${{ inputs.standalone == true }}
+        env:
+          # This secret is intentionally never written to the repository, logs,
+          # artifacts, or release assets. It must contain a base64 encoded ZIP
+          # whose root contains offline-mfi/identity.pk8 and certificate.p7b.
+          DIPLAY_AUTH_ASSETS_ZIP_B64: ${{ secrets.DIPLAY_AUTH_ASSETS_ZIP_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$DIPLAY_AUTH_ASSETS_ZIP_B64" || {
+            echo "Standalone builds require repository secret DIPLAY_AUTH_ASSETS_ZIP_B64." >&2
+            exit 1
+          }
+          auth_root="$RUNNER_TEMP/diplay-runtime-assets"
+          archive="$RUNNER_TEMP/diplay-runtime-assets.zip"
+          mkdir -p "$auth_root"
+          printf '%s' "$DIPLAY_AUTH_ASSETS_ZIP_B64" | base64 --decode > "$archive"
+          unzip -qq "$archive" -d "$auth_root"
+          test -s "$auth_root/offline-mfi/identity.pk8"
+          test -s "$auth_root/offline-mfi/certificate.p7b"
+          chmod 700 "$auth_root" "$auth_root/offline-mfi"
+          chmod 600 "$auth_root/offline-mfi/identity.pk8" "$auth_root/offline-mfi/certificate.p7b"
+          rm -f "$archive"
+          echo "DIPLAY_AUTH_ASSETS_DIR=$auth_root" >> "$GITHUB_ENV"
+          echo "DIPLAY_BUILD_STANDALONE=true" >> "$GITHUB_ENV"
+
+      - name: Build API17 ARMv7 APK
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         run: |
           chmod +x gradlew
-          ./gradlew :mobile:assembleDebug --stacktrace --no-daemon
+          if [ "${DIPLAY_BUILD_STANDALONE:-false}" = "true" ]; then
+            ./gradlew :mobile:assembleStandaloneDebug --stacktrace --no-daemon
+          else
+            ./gradlew :mobile:assembleDebug --stacktrace --no-daemon
+          fi
 
       - name: Verify API17 and ARMv7 packaging
         run: |
@@ -58,6 +94,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiPlay-Android42-API17-armeabi-v7a
+          name: DiPlay-Android42-API17-${{ inputs.standalone == true && 'standalone' || 'source-only' }}-armeabi-v7a
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
