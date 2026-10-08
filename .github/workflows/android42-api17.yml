@@ -23,7 +23,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android 37 and the API17-capable NDK
+      - name: Install Android 36 and the API17-capable NDK
         run: |
           # GitHub's Ubuntu runner already exports a current SDK manager.  Do
           # not invoke setup-android here: its legacy `tools` package is no
@@ -31,8 +31,8 @@ jobs:
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
             "ndk;23.1.7779620"
 
       - name: Build debug APK
@@ -47,7 +47,7 @@ jobs:
         run: |
           apk=mobile/build/outputs/apk/debug/mobile-debug.apk
           test -f "$apk"
-          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$apk" | tee apk-badging.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" | tee apk-badging.txt
           grep -q "sdkVersion:'17'" apk-badging.txt
           unzip -l "$apk" | tee apk-contents.txt
           grep -q 'lib/armeabi-v7a/' apk-contents.txt

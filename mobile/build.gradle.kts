@@ -20,7 +20,9 @@ android {
         // dependency on the same install baseline; runtime-only features remain
         // guarded in the compatibility layer.
         minSdk = 17
-        targetSdk = 37
+        // API 36 is the newest stable SDK package available to the reproducible
+        // GitHub build.  This does not change the API17 runtime baseline.
+        targetSdk = 36
         multiDexEnabled = true
         versionCode = 35
         versionName = "0.2.14-legacy.api17.1"

@@ -12,7 +12,7 @@ android {
     defaultConfig {
         applicationId = "com.diplay.home"
         minSdk = 30 // SurfaceView.getHostToken and setChildSurfacePackage
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1"
     }
