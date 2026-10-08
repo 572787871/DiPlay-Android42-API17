@@ -5,7 +5,9 @@ plugins {
 android {
     namespace = "com.shilapi.xcertplay.host"
     compileSdk {
-        version = release(37)
+        // This shared library is consumed by the API17 application. Keep its
+        // AAR metadata at the same stable compile SDK available to CI.
+        version = release(36)
     }
 
     defaultConfig {
