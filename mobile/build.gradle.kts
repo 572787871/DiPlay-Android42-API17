@@ -29,13 +29,13 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(
-                providers.environmentVariable("ANDROID_KEYSTORE_PATH")
-                    .getOrElse("missing-release-keystore.jks"),
-            )
-            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").getOrElse("")
-            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").getOrElse("")
-            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").getOrElse("")
+            val localKeystore = rootProject.file("release-signing.jks").takeIf { it.isFile }
+                ?: rootProject.file("release-signing.keystore").takeIf { it.isFile }
+            storeFile = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
+                .orNull?.let { file(it) } ?: localKeystore ?: file("missing-release-keystore.jks")
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").getOrElse("diplay123456")
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").getOrElse("diplay")
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").getOrElse("diplay123456")
         }
     }
 
