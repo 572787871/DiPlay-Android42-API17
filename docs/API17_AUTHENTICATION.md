@@ -54,8 +54,9 @@ The directory is ignored by Git, and the build rejects unexpected key/certificat
 
 ## Building in GitHub Actions
 
-The default workflow produces a source-only ARMv7 package with no accessory identity. It is safe
-to publish and is useful for API 17 installation/startup validation.
+The default workflow first produces a signed test ARMv7 package with no accessory identity. It is
+safe to publish and is useful for API 17 installation/startup validation; it is not a claim of
+successful CarPlay authentication. The Android signing key is separate from MFi identity material.
 
 To create an authorized standalone package, a repository administrator must add these repository
 secrets:
@@ -73,6 +74,9 @@ The **Build Android 4.2 API17 Standalone APK** workflow expands those files only
 temporary directory, passes the authentication directory through `DIPLAY_AUTH_ASSETS_DIR`, and
 verifies the packaged bytes against the supplied inputs before upload. Do not put credentials or
 a signing keystore in the repository or a public release.
+
+When manually triggered with `standalone=true`, the workflow runs a second job and emits the
+authenticated artifact only after the signed test job succeeds.
 
 ## API 17 compatibility boundaries
 
