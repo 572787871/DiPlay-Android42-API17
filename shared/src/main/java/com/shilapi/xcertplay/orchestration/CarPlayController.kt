@@ -1894,6 +1894,7 @@ class CarPlayController(
             sharedConnection = sharedConnection,
             function = function,
             expectedConfiguration = configuration.id,
+            vendorId = device.vendorId,
             useAsyncRead = true,
             onDiagnostic = ::connectionDiagnostic,
         )
