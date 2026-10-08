@@ -23,10 +23,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install Android 37 and the API17-capable NDK
         run: |
+          # GitHub's Ubuntu runner already exports a current SDK manager.  Do
+          # not invoke setup-android here: its legacy `tools` package is no
+          # longer published and fails before Gradle has a chance to run.
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager \
             "platforms;android-37" \
