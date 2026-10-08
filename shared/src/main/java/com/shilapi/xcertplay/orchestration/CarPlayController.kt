@@ -2238,6 +2238,9 @@ class CarPlayController(
         val bonded = adapter.bondedDevices.orEmpty()
         config.wirelessBluetoothDeviceAddress?.let { selected ->
             bonded.firstOrNull { it.address.equals(selected, ignoreCase = true) }?.let { return it }
+            if (BluetoothAdapter.checkBluetoothAddress(selected)) {
+                runCatching { adapter.getRemoteDevice(selected) }.getOrNull()?.let { return it }
+            }
             debugLog("saved wireless iPhone is no longer paired; falling back to current bonded devices")
         }
         val iPhones = bonded.filter { device ->

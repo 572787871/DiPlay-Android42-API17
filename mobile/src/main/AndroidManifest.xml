@@ -6,7 +6,7 @@
         tools:overrideLibrary="androidx.media3.exoplayer.hls, androidx.media3.exoplayer, androidx.media3.common, androidx.media3.container, androidx.media3.datasource, androidx.media3.decoder, androidx.media3.extractor, androidx.media3.database, androidx.media3.session, androidx.media3.ui" />
 
     <application
-        android:name="androidx.multidex.MultiDexApplication"
+        android:name="com.shilapi.xcertplay.DiPlayApplication"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"

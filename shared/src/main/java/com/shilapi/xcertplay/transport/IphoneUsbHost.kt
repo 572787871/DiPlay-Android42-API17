@@ -147,18 +147,35 @@ class IphoneUsbHost(
         executor.execute {
             callback(runTransition(device) { connection ->
                 val response = ByteArray(VENDOR_RESPONSE_LENGTH)
-                val transferred = connection.controlTransfer(
-                    USB_VENDOR_DEVICE_IN,
-                    CARPLAY_CONFIGURATION_REQUEST,
-                    0,
-                    CARPLAY_CONFIGURATION_INDEX,
-                    response,
-                    response.size,
-                    CONTROL_TRANSFER_TIMEOUT_MILLIS,
-                )
-                if (transferred != response.size) {
+                var lastTransferred = -1
+                var success = false
+                val maxAttempts = 3
+                for (attempt in 1..maxAttempts) {
+                    lastTransferred = connection.controlTransfer(
+                        USB_VENDOR_DEVICE_IN,
+                        CARPLAY_CONFIGURATION_REQUEST,
+                        0,
+                        CARPLAY_CONFIGURATION_INDEX,
+                        response,
+                        response.size,
+                        CONTROL_TRANSFER_TIMEOUT_MILLIS,
+                    )
+                    if (lastTransferred == response.size) {
+                        success = true
+                        break
+                    }
+                    if (attempt < maxAttempts) {
+                        try {
+                            Thread.sleep(200L * attempt)
+                        } catch (ignored: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                    }
+                }
+                if (!success) {
                     throw IphoneUsbException.Protocol(
-                        "CarPlay configuration request transferred $transferred of ${response.size} bytes",
+                        "CarPlay configuration request transferred $lastTransferred of ${response.size} bytes (after $maxAttempts attempts)",
                     )
                 }
                 TransitionResult.ReenumerationRequested

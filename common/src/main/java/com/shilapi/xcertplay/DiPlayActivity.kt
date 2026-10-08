@@ -279,9 +279,11 @@ class DiPlayActivity : ComponentActivity() {
             window.statusBarColor = BG
             window.navigationBarColor = BG
         }
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            hide(WindowInsetsCompat.Type.statusBars())
+        runCatching {
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                isAppearanceLightStatusBars = false
+                hide(WindowInsetsCompat.Type.statusBars())
+            }
         }
         setupError = runCatching { DiPlayBootstrap.ensure(this, AirPlayPersistence.loadMfiTarget(this)) }.exceptionOrNull()?.let {
             android.util.Log.e("DiPlaySetup", "CarPlay authentication could not be loaded", it)
@@ -3761,10 +3763,18 @@ class DiPlayActivity : ComponentActivity() {
         }
         val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
             ?: android.bluetooth.BluetoothAdapter.getDefaultAdapter()
-        if (adapter == null || !adapter.isEnabled) {
+        if (adapter == null) {
+            promptManualBluetoothInput()
+            return
+        }
+        if (!adapter.isEnabled) {
+            runCatching { adapter.enable() }
+        }
+        if (!adapter.isEnabled) {
             AlertDialog.Builder(this).setTitle(getString(R.string.turn_on_bluetooth))
                 .setMessage(getString(R.string.enable_the_car_s_bluetooth_and_pair_your_iphone_first))
                 .setPositiveButton(getString(R.string.open_bluetooth)) { _, _ -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                .setNeutralButton(getString(R.string.manual_hotspot)) { _, _ -> promptManualBluetoothInput() }
                 .setNegativeButton(getString(R.string.later), null).show(); return
         }
         val devices = runCatching { adapter.bondedDevices.sortedBy { it.name ?: "" } }.getOrDefault(emptyList())
@@ -3772,6 +3782,7 @@ class DiPlayActivity : ComponentActivity() {
             AlertDialog.Builder(this).setTitle(getString(R.string.pair_your_iphone))
                 .setMessage(getString(R.string.on_your_iphone_open_settings_bluetooth_and_pair_with_the_c))
                 .setPositiveButton(getString(R.string.open_bluetooth)) { _, _ -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                .setNeutralButton(getString(R.string.manual_hotspot)) { _, _ -> promptManualBluetoothInput() }
                 .setNegativeButton(getString(R.string.got_it), null).show(); return
         }
         AlertDialog.Builder(this).setTitle(getString(R.string.choose_your_iphone))
@@ -3784,8 +3795,53 @@ class DiPlayActivity : ComponentActivity() {
                 val start = pendingWireless; pendingWireless = false
                 render()
                 if (start) connect(true)
-            }.setNeutralButton(getString(R.string.pair_another)) { _, _ -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            }.setNeutralButton(getString(R.string.pair_another)) { _, _ -> promptManualBluetoothInput() }
             .setNegativeButton(getString(R.string.cancel)) { _, _ -> pendingWireless = false }.show()
+    }
+
+    private fun promptManualBluetoothInput() {
+        val fields = column().apply { setPadding(dp(24), dp(12), dp(24), dp(12)) }
+        fields.addView(label("Bluetooth MAC Address (e.g. AA:BB:CC:DD:EE:FF):", 14, MUTED))
+        val input = EditText(this).apply {
+            hint = "00:11:22:33:44:55"
+            setText(DiPlayPreferences.phoneAddress(this@DiPlayActivity) ?: "")
+            setSingleLine()
+        }
+        val nameInput = EditText(this).apply {
+            hint = "iPhone"
+            setText(DiPlayPreferences.phoneName(this@DiPlayActivity))
+            setSingleLine()
+        }
+        fields.addView(input)
+        fields.addView(label("Device Name:", 14, MUTED))
+        fields.addView(nameInput)
+        val error = label("", 14, WARNING)
+        fields.addView(error)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.choose_your_iphone))
+            .setView(ScrollView(this).apply { addView(fields) })
+            .setPositiveButton(getString(R.string.save_details), null)
+            .setNegativeButton(getString(R.string.cancel)) { _, _ -> pendingWireless = false }
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val rawMac = input.text.toString().trim().uppercase()
+                val name = nameInput.text.toString().trim().ifEmpty { "iPhone" }
+                if (android.bluetooth.BluetoothAdapter.checkBluetoothAddress(rawMac)) {
+                    DiPlayPreferences.savePhone(this@DiPlayActivity, rawMac, name)
+                    val start = pendingWireless
+                    pendingWireless = false
+                    dialog.dismiss()
+                    render()
+                    if (start) connect(true)
+                } else {
+                    error.text = "Invalid MAC address (format XX:XX:XX:XX:XX:XX)"
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun wirelessHelp() {
