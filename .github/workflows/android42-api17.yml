@@ -1,23 +1,14 @@
-name: Android 4.2 API17 APK
+name: Build Android 4.2 API17 Standalone APK
 
 on:
   workflow_dispatch:
-    inputs:
-      standalone:
-        description: 'Build a standalone APK with the repository secret DIPLAY_AUTH_ASSETS_ZIP_B64'
-        required: false
-        default: false
-        type: boolean
-  push:
-    branches:
-      - api17-cs55
 
 permissions:
   contents: read
 
 jobs:
-  build-api17-armv7:
-    name: Build API17 armeabi-v7a APK
+  build-api17-armv7-standalone:
+    name: Build API17 standalone armeabi-v7a APK
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -31,9 +22,6 @@ jobs:
 
       - name: Install Android 36 and the API17-capable NDK
         run: |
-          # GitHub's Ubuntu runner already exports a current SDK manager.  Do
-          # not invoke setup-android here: its legacy `tools` package is no
-          # longer published and fails before Gradle has a chance to run.
           sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
@@ -44,56 +32,85 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;23.1.7779620"
 
-      - name: Prepare authorized standalone authentication assets
-        if: ${{ inputs.standalone == true }}
+      - name: Prepare protected standalone inputs
+        shell: bash
         env:
-          # This secret is intentionally never written to the repository, logs,
-          # artifacts, or release assets. It must contain a base64 encoded ZIP
-          # whose root contains offline-mfi/identity.pk8 and certificate.p7b.
-          DIPLAY_AUTH_ASSETS_ZIP_B64: ${{ secrets.DIPLAY_AUTH_ASSETS_ZIP_B64 }}
+          IDENTITY_PK8_B64: ${{ secrets.DIPLAY_MFI_IDENTITY_PK8_B64 }}
+          CERTIFICATE_P7B_B64: ${{ secrets.DIPLAY_MFI_CERTIFICATE_P7B_B64 }}
+          KEYSTORE_B64: ${{ secrets.DIPLAY_ANDROID_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
-          test -n "$DIPLAY_AUTH_ASSETS_ZIP_B64" || {
-            echo "Standalone builds require repository secret DIPLAY_AUTH_ASSETS_ZIP_B64." >&2
-            exit 1
-          }
-          auth_root="$RUNNER_TEMP/diplay-runtime-assets"
-          archive="$RUNNER_TEMP/diplay-runtime-assets.zip"
-          mkdir -p "$auth_root"
-          printf '%s' "$DIPLAY_AUTH_ASSETS_ZIP_B64" | base64 --decode > "$archive"
-          unzip -qq "$archive" -d "$auth_root"
-          test -s "$auth_root/offline-mfi/identity.pk8"
-          test -s "$auth_root/offline-mfi/certificate.p7b"
-          chmod 700 "$auth_root" "$auth_root/offline-mfi"
-          chmod 600 "$auth_root/offline-mfi/identity.pk8" "$auth_root/offline-mfi/certificate.p7b"
-          rm -f "$archive"
-          echo "DIPLAY_AUTH_ASSETS_DIR=$auth_root" >> "$GITHUB_ENV"
-          echo "DIPLAY_BUILD_STANDALONE=true" >> "$GITHUB_ENV"
+          test -n "$IDENTITY_PK8_B64"
+          test -n "$CERTIFICATE_P7B_B64"
+          test -n "$KEYSTORE_B64"
+          auth_dir="$RUNNER_TEMP/diplay-auth"
+          keystore_path="$RUNNER_TEMP/diplay-signing.jks"
+          install -d -m 700 "$auth_dir/offline-mfi"
+          printf '%s' "$IDENTITY_PK8_B64" | base64 --decode > "$auth_dir/offline-mfi/identity.pk8"
+          printf '%s' "$CERTIFICATE_P7B_B64" | base64 --decode > "$auth_dir/offline-mfi/certificate.p7b"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore_path"
+          chmod 600 "$auth_dir/offline-mfi/identity.pk8" \
+            "$auth_dir/offline-mfi/certificate.p7b" "$keystore_path"
+          test -s "$auth_dir/offline-mfi/identity.pk8"
+          test -s "$auth_dir/offline-mfi/certificate.p7b"
+          test -s "$keystore_path"
+          echo "DIPLAY_AUTH_ASSETS_DIR=$auth_dir" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
 
-      - name: Build API17 ARMv7 APK
+      - name: Build API17 standalone ARMv7 APK
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.DIPLAY_ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.DIPLAY_ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.DIPLAY_ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          if [ "${DIPLAY_BUILD_STANDALONE:-false}" = "true" ]; then
-            ./gradlew :mobile:assembleStandaloneDebug --stacktrace --no-daemon
-          else
-            ./gradlew :mobile:assembleDebug --stacktrace --no-daemon
-          fi
+          ./gradlew :mobile:assembleStandaloneDebug --stacktrace --no-daemon
 
-      - name: Verify API17 and ARMv7 packaging
+      - name: Verify API17 package, ABI, authentication and signature
+        shell: bash
         run: |
-          apk=mobile/build/outputs/apk/debug/mobile-debug.apk
+          set -euo pipefail
+          apk="mobile/build/outputs/apk/debug/mobile-debug.apk"
           test -f "$apk"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" | tee apk-badging.txt
-          grep -q "sdkVersion:'17'" apk-badging.txt
-          unzip -l "$apk" | tee apk-contents.txt
-          grep -q 'lib/armeabi-v7a/' apk-contents.txt
-          ! grep -q 'lib/arm64-v8a/' apk-contents.txt
+          badging="$($ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$apk")"
+          grep -Fq "package: name='com.shihab.diplay.hudtest'" <<< "$badging"
+          grep -Fq "sdkVersion:'17'" <<< "$badging"
+          grep -Fq "targetSdkVersion:'36'" <<< "$badging"
+          grep -Fq "native-code: 'armeabi-v7a'" <<< "$badging"
+          permissions="$RUNNER_TEMP/api17-manifest-permissions.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump permissions "$apk" | tee "$permissions"
+          for permission in \
+            android.permission.BLUETOOTH \
+            android.permission.BLUETOOTH_ADMIN \
+            android.permission.BLUETOOTH_CONNECT \
+            android.permission.NEARBY_WIFI_DEVICES \
+            android.permission.ACCESS_FINE_LOCATION \
+            android.permission.ACCESS_COARSE_LOCATION \
+            android.permission.ACCESS_WIFI_STATE \
+            android.permission.CHANGE_WIFI_STATE \
+            android.permission.CHANGE_WIFI_MULTICAST_STATE; do
+            grep -Fq "$permission" "$permissions"
+          done
+          native_abis="$(unzip -Z1 "$apk" | awk -F/ '/^lib\/[^/]+\/[^/]+\.so$/ { print $2 }' | sort -u)"
+          test "$native_abis" = "armeabi-v7a"
+          unzip -Z1 "$apk" | grep -Fxq 'lib/armeabi-v7a/libxcertplay_i2c.so'
+          unzip -Z1 "$apk" | grep -Fxq 'lib/armeabi-v7a/liblocal_hotspot_radio.so'
+          test "$(unzip -Z1 "$apk" | grep -Ec '^assets/offline-mfi/(identity\.pk8|certificate\.p7b)$')" -eq 2
+          cmp -s <(unzip -p "$apk" assets/offline-mfi/identity.pk8) \
+            "$DIPLAY_AUTH_ASSETS_DIR/offline-mfi/identity.pk8"
+          cmp -s <(unzip -p "$apk" assets/offline-mfi/certificate.p7b) \
+            "$DIPLAY_AUTH_ASSETS_DIR/offline-mfi/certificate.p7b"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          install -d dist
+          cp "$apk" dist/DiPlay-Android42-API17-Standalone.apk
+          cp "$permissions" dist/DiPlay-Android42-API17-manifest-permissions.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DiPlay-Android42-API17-${{ inputs.standalone == true && 'standalone' || 'source-only' }}-armeabi-v7a
-          path: mobile/build/outputs/apk/debug/mobile-debug.apk
+          name: DiPlay-Android42-API17-Standalone
+          path: |
+            dist/DiPlay-Android42-API17-Standalone.apk
+            dist/DiPlay-Android42-API17-manifest-permissions.txt
           if-no-files-found: error
+          retention-days: 30

@@ -57,13 +57,22 @@ The directory is ignored by Git, and the build rejects unexpected key/certificat
 The default workflow produces a source-only ARMv7 package with no accessory identity. It is safe
 to publish and is useful for API 17 installation/startup validation.
 
-To create an authorized standalone package, a repository administrator must add the repository
-secret `DIPLAY_AUTH_ASSETS_ZIP_B64`. Its value is a base64-encoded ZIP with `offline-mfi` at its
-root. Start **Android 4.2 API17 APK** manually with `standalone=true`.
+To create an authorized standalone package, a repository administrator must add these repository
+secrets:
 
-The workflow expands it only into the runner temporary directory, passes that directory through
-`DIPLAY_AUTH_ASSETS_DIR`, and deletes the archive before artifact upload. Do not put the ZIP,
-the two credential files, or a signing keystore in the repository or a public release.
+| Secret | Purpose |
+| --- | --- |
+| `DIPLAY_MFI_IDENTITY_PK8_B64` | Base64 of the authorized `identity.pk8` file |
+| `DIPLAY_MFI_CERTIFICATE_P7B_B64` | Base64 of the matching authorized certificate |
+| `DIPLAY_ANDROID_KEYSTORE_B64` | Base64 of the signing keystore used for updates |
+| `DIPLAY_ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `DIPLAY_ANDROID_KEY_ALIAS` | Signing alias |
+| `DIPLAY_ANDROID_KEY_PASSWORD` | Key password |
+
+The **Build Android 4.2 API17 Standalone APK** workflow expands those files only into the runner
+temporary directory, passes the authentication directory through `DIPLAY_AUTH_ASSETS_DIR`, and
+verifies the packaged bytes against the supplied inputs before upload. Do not put credentials or
+a signing keystore in the repository or a public release.
 
 ## API 17 compatibility boundaries
 

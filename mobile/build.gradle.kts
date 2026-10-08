@@ -1,17 +1,39 @@
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.security.interfaces.ECPublicKey
+import java.security.spec.PKCS8EncodedKeySpec
+
 plugins {
     alias(libs.plugins.android.application)
 }
 
-// Optional local-only input. CI and ordinary source builds contain no accessory identity.
+// Standalone authentication is always an explicit, local-only build input. Never fall back to a
+// repository directory: a release must not silently include a stale or unintended identity.
 val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
     .orNull?.let { file(it).canonicalFile }
-    ?: rootProject.file(".private/runtime-assets").takeIf { it.isDirectory }?.canonicalFile
-    ?: rootProject.file("auth-assets").takeIf { it.isDirectory }?.canonicalFile
+val androidKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+val androidKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+val androidKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+val androidKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+val androidKeystoreFile = androidKeystorePath?.let { file(it).canonicalFile }
+val externalSigningValues = listOf(
+    androidKeystorePath,
+    androidKeystorePassword,
+    androidKeyAlias,
+    androidKeyPassword,
+)
+val hasExternalSigning = externalSigningValues.all { !it.isNullOrBlank() }
+check(externalSigningValues.all { it.isNullOrBlank() } || hasExternalSigning) {
+    "Android signing configuration is incomplete"
+}
 
 android {
     namespace = "com.shilapi.xcertplay"
+    // Keep this in sync with the reproducible GitHub Actions SDK. This affects
+    // compilation only; minSdk below remains the Android 4.2/API17 baseline.
     compileSdk {
-        version = release(37)
+        version = release(36)
     }
 
     defaultConfig {
@@ -34,13 +56,10 @@ android {
 
     signingConfigs {
         create("release") {
-            val localKeystore = rootProject.file("release-signing.jks").takeIf { it.isFile }
-                ?: rootProject.file("release-signing.keystore").takeIf { it.isFile }
-            storeFile = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
-                .orNull?.let { file(it) } ?: localKeystore ?: file("missing-release-keystore.jks")
-            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").getOrElse("diplay123456")
-            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").getOrElse("diplay")
-            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").getOrElse("diplay123456")
+            storeFile = androidKeystoreFile ?: file("missing-release-keystore.jks")
+            storePassword = androidKeystorePassword ?: ""
+            keyAlias = androidKeyAlias ?: ""
+            keyPassword = androidKeyPassword ?: ""
         }
     }
 
@@ -48,6 +67,7 @@ android {
         debug {
             applicationIdSuffix = ".hudtest"
             versionNameSuffix = "-hud-test"
+            if (hasExternalSigning) signingConfig = signingConfigs.getByName("release")
         }
         release {
             optimization {
@@ -104,20 +124,60 @@ val verifyStandaloneAuthentication by tasks.registering {
         check(directory != null) {
             "Standalone car builds require DIPLAY_AUTH_ASSETS_DIR; assembleDebug alone is source-only."
         }
-        check(listOf("identity.pk8", "certificate.p7b").all {
-            directory.resolve("offline-mfi/$it").let { file -> file.isFile && file.length() > 0 }
-        }) { "Standalone CarPlay authentication files are missing or empty" }
+        val identityFile = directory.resolve("offline-mfi/identity.pk8")
+        val certificateFile = directory.resolve("offline-mfi/certificate.p7b")
+        check(listOf(identityFile, certificateFile).all { it.isFile && it.length() in 1..16_384 }) {
+            "Standalone CarPlay authentication files are missing, empty, or too large"
+        }
+        val encodedKey = identityFile.readBytes()
+        val privateKey = try {
+            KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(encodedKey))
+        } finally {
+            encodedKey.fill(0)
+        }
+        val certificates = certificateFile.inputStream().use { input ->
+            CertificateFactory.getInstance("X.509").generateCertificates(input)
+        }
+        check(certificates.size == 1) { "Expected exactly one accessory certificate" }
+        val publicKey = certificates.single().publicKey as? ECPublicKey
+            ?: error("Expected an EC accessory certificate")
+        check(publicKey.params.order.toString(16) ==
+            "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551") {
+            "Expected a P-256 accessory certificate"
+        }
+        val challenge = ByteArray(32) { index -> index.toByte() }
+        val signer = Signature.getInstance("NONEwithECDSA").apply {
+            initSign(privateKey)
+            update(challenge)
+        }
+        val verifier = Signature.getInstance("NONEwithECDSA").apply {
+            initVerify(publicKey)
+            update(challenge)
+        }
+        check(verifier.verify(signer.sign())) {
+            "Standalone CarPlay private key does not match its certificate"
+        }
     }
 }
-tasks.named("preBuild") { mustRunAfter(verifyStandaloneAuthentication) }
+val verifyStandaloneSigning by tasks.registering {
+    group = "verification"
+    notCompatibleWithConfigurationCache("Reads protected signing inputs supplied only for this invocation")
+    doLast {
+        check(hasExternalSigning) {
+            "Standalone builds require external Android signing variables"
+        }
+        check(androidKeystoreFile?.isFile == true) { "Standalone Android signing keystore is missing" }
+    }
+}
+tasks.named("preBuild") { mustRunAfter(verifyStandaloneAuthentication, verifyStandaloneSigning) }
 tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
-    dependsOn(verifyStandaloneAuthentication, "assembleDebug")
+    dependsOn(verifyStandaloneAuthentication, verifyStandaloneSigning, "assembleDebug")
 }
 
 tasks.register("assembleStandaloneRelease") {
     group = "build"
     description = "Build a signed standalone APK with explicitly provisioned authentication."
-    dependsOn(verifyStandaloneAuthentication, "assembleRelease")
+    dependsOn(verifyStandaloneAuthentication, verifyStandaloneSigning, "assembleRelease")
 }
